@@ -1,0 +1,50 @@
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2026 Hans Rosenfeld
+#
+
+name: Build OpenWrt Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: 'OpenWrt Version (e.g. 25.12.6)'
+        required: true
+        default: '25.12.6'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine OpenWrt version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.openwrt_version }}" ]; then
+            echo "version=${{ github.event.inputs.openwrt_version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build Image via OpenWrt ASU API
+        run: |
+          chmod +x build-openwrt-image.sh
+          ./build-openwrt-image.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.ver.outputs.version }}"
+          files: |
+            openwrt-oi-wifi-${{ steps.ver.outputs.version }}-x86-64-efi.img.gz
+            openwrt-oi-wifi-${{ steps.ver.outputs.version }}-x86-64-efi.img.gz.sha256
+
