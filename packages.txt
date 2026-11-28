@@ -36,3 +36,7 @@ iperf3
 iftop
 bmon
 wavemon
+procps-ng-watch
+horst
+wpa-cli
+pciutils

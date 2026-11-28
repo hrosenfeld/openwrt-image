@@ -32,35 +32,86 @@ uci commit dhcp
 mkdir -p /etc/hotplug.d/net
 cat << 'EOF' > /etc/hotplug.d/net/99-tc-bridge
 #!/bin/sh
-if [ "$ACTION" = "add" -o "$ACTION" = "up" ]; then
-    if [ "$INTERFACE" = "phy0-sta0" -o "$INTERFACE" = "eth0" ]; then
-        ip addr flush dev eth0 2>/dev/null
-        ip addr flush dev phy0-sta0 2>/dev/null
-
-        ip link set eth0 up promisc on 2>/dev/null
-        ip link set phy0-sta0 up promisc on 2>/dev/null
-
-        iw dev phy0-sta0 set power_save off 2>/dev/null
-
-        tc qdisc del dev eth0 ingress 2>/dev/null
-        tc qdisc del dev phy0-sta0 ingress 2>/dev/null
-
-        tc qdisc add dev eth0 handle ffff: ingress
-        tc filter add dev eth0 parent ffff: protocol all matchall action mirred egress redirect dev phy0-sta0
-
-        tc qdisc add dev phy0-sta0 handle ffff: ingress
-        tc filter add dev phy0-sta0 parent ffff: protocol all matchall action mirred egress redirect dev eth0
-    fi
+if [ "${ACTION}" != "add" -a "${ACTION}" != "up" ]; then
+	exit 0
 fi
+
+if [ "${INTERFACE}" != "phy0-sta0" -a "${INTERFACE}" != "eth0" ]; then
+	exit 0
+fi
+
+ip addr flush dev eth0 2>/dev/null
+ip addr flush dev phy0-sta0 2>/dev/null
+
+ip link set eth0 up promisc on 2>/dev/null
+ip link set phy0-sta0 up promisc on 2>/dev/null
+
+iw dev phy0-sta0 set power_save off 2>/dev/null
+
+tc qdisc del dev eth0 ingress 2>/dev/null
+tc qdisc del dev phy0-sta0 ingress 2>/dev/null
+
+tc qdisc add dev eth0 handle ffff: ingress
+tc filter add dev eth0 parent ffff: protocol all matchall action mirred \
+	egress redirect dev phy0-sta0
+
+tc qdisc add dev phy0-sta0 handle ffff: ingress
+tc filter add dev phy0-sta0 parent ffff: protocol all matchall action mirred \
+	egress redirect dev eth0
+
+exit 0
 EOF
 chmod +x /etc/hotplug.d/net/99-tc-bridge
 
+
+cat << 'EOF' > /etc/rc.local
+#!/bin/sh
+# Put your custom commands here that should be executed once
+# the system init finished. By default this file does nothing.
+
+LOG_FILE=/root/coldboot.log
+RETRY_FILE=/root/.coldboot_retries
+RETRIES=$(cat "${RETRY_FILE}" 2>/dev/null || echo 0)
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+if [ -d /sys/class/ieee80211/phy0 ]; then
+	echo "${DATE} Wi-Fi ready after ${RETRIES} reboot(s)" >> "${LOG_FILE}"
+	tail -n 20 "${LOG_FILE}" > "${LOG_FILE}.tmp" && \
+		mv "${LOG_FILE}.tmp" "${LOG_FILE}"
+	rm -rf ${RETRY_FILE}
+elif [ "${RETRIES}" -lt 2 ]; then
+	RETRIES=$((RETRIES + 1))
+	echo ${RETRIES} > ${RETRY_FILE}
+	echo "${DATE} phy0 missing after cold boot (attempt ${RETRIES}, " \
+		"rebooting..." >> "${LOG_FILE}"
+	sync
+	reboot
+else
+	echo "${DATE} phy0 still missing after ${RETRIES} retriesl; giving up."\
+		>>"${LOG_FILE}"
+fi
+
+exit 0
+EOF
+
+cat << 'EOF' > /usr/bin/wifimon
+#!/bin/sh
+
+IFACE="${1:-phy0-sta0}"
+exec watch -n 1 "
+iwinfo $IFACE info 2>/dev/null
+echo '------------------------------------------------------------------------'
+iw dev $IFACE station dump 2>/dev/null | grep -E 'signal:|tx bitrate:|rx bitrate:|tx retries:|tx failed:|expected throughput:'
+"
+EOF
+chmod 0755 /usr/bin/wifimon
+
 # Set up Qemu Guest Agent
 if [ -f /etc/config/qemu-ga ]; then
-    uci set qemu-ga.global.enabled='1'
-    uci set qemu-ga.global.method='virtio-serial'
-    uci set qemu-ga.global.path='/dev/vport0p1'
-    uci commit qemu-ga
+	uci set qemu-ga.global.enabled='1'
+	uci set qemu-ga.global.method='virtio-serial'
+	uci set qemu-ga.global.path='/dev/vport0p1'
+	uci commit qemu-ga
 fi
 /etc/init.d/qemu-ga enable 2>/dev/null
 
